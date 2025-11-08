@@ -3,7 +3,12 @@ from aws_cdk import (
     aws_ssm as ssm,
     aws_ec2 as ec2,
     aws_eks as eks,
-    CfnOutput
+    aws_iam as iam,
+    aws_lambda as _lambda,
+    custom_resources as cr,
+    CustomResource,
+    CfnOutput,
+    Duration
 )
 
 from aws_cdk.lambda_layer_kubectl_v32 import KubectlV32Layer
@@ -18,12 +23,12 @@ class AwsCdkProjectStack(Stack):
             self, "ParameterAccountEnv",
             parameter_name="/platform/account/env",
             string_value="development",
-            description="Setting the environment development / staging / production for the account." 
+            description="Setting the environment development / stage / production for the account." 
         )
 
         vpc = ec2.Vpc(
             self, "VPC", 
-            ip_addresses=ec2.IpAddresses.cidr("10.102.0.0/16"),
+            ip_addresses=ec2.IpAddresses.cidr("10.103.0.0/16"),
             max_azs=2,
             subnet_configuration=[
                     ec2.SubnetConfiguration(
@@ -39,15 +44,107 @@ class AwsCdkProjectStack(Stack):
             ]
         )
 
+        vpc.add_interface_endpoint("SsmEndpoint", service=ec2.InterfaceVpcEndpointAwsService.SSM)
+
+        s3_endpoint = vpc.add_gateway_endpoint(
+            "S3Gateway", 
+            service=ec2.GatewayVpcEndpointAwsService.S3
+        )
+        s3_endpoint.add_to_policy(
+            iam.PolicyStatement(
+                principals=[iam.AnyPrincipal()],
+                actions=["s3:*"],
+                resources=["*"]
+            )
+        )
+
         eks_cluster = eks.Cluster(
             self, "EKSCluster",
             vpc=vpc,
             version=eks.KubernetesVersion.V1_32,
             kubectl_layer=KubectlV32Layer(self, "kubectl"),
-            default_capacity=1,
-            default_capacity_instance=ec2.InstanceType("t3.medium"),
+            default_capacity=0,
             endpoint_access=eks.EndpointAccess.PUBLIC,
-            cluster_name="CustomResourceEksCluster"
+            cluster_name="EksCluster"
+        )
+
+        eks_cluster.add_nodegroup_capacity(
+            "BottlerocketNodes",
+            instance_types=[ec2.InstanceType("t3.medium")],
+            min_size=1,
+            max_size=2,
+            desired_size=1,
+            ami_type=eks.NodegroupAmiType.BOTTLEROCKET_X86_64,
+            nodegroup_name="bottlerocket-nodegroup"
+        )
+
+        eks_cluster.aws_auth.add_role_mapping(
+            iam.Role.from_role_arn(
+                self,
+                "terraform-role",
+                "arn:aws:iam::590183962399:role/ADFS-RocketAtlassianDevOps-AppTeam"
+            ),
+            groups=["system:masters"]
+        )
+
+        lambda_sg = ec2.SecurityGroup(
+            self, "CustomResourceLambdaSG",
+            vpc=vpc,
+            description="Security group for Custom Resource Lambda"
+        )
+
+        lambda_handler = _lambda.Function(
+            self, "SSMReaderHandler",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="ssm_reader_handler.handler",
+            code=_lambda.Code.from_asset("lambda"),
+            timeout=Duration.minutes(4),
+            vpc=vpc,
+            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS),
+            security_groups=[lambda_sg]
+        )
+
+        lambda_handler.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["ssm:GetParameter"],
+                resources=["*"],
+                effect=iam.Effect.ALLOW
+            )
+        )
+
+        custom_resource_provider = cr.Provider(
+            self, "CustomResourceProvider",
+            on_event_handler=lambda_handler,
+            log_group=None
+        )
+
+        helm_values_resource = CustomResource(
+            self, "HelmValuesCustomResource",
+            service_token=custom_resource_provider.service_token,
+            resource_type="Custom::HelmValueGenerator",
+            properties={
+                "SsmParameterName": ssm_parameter.parameter_name, 
+                "SSMValueTrigger": ssm_parameter.string_value
+            }
+        )
+
+        replica_count_token = helm_values_resource.get_att("ReplicaCount")
+        
+        helm_values = {
+            "controller": {
+                "replicaCount": replica_count_token, 
+                "electionId": "ingress-controller-leader"
+            }
+        }
+
+        nginx_ingress_helm = eks.HelmChart(
+            self, "NginxIngressHelm",
+            cluster=eks_cluster,
+            chart="ingress-nginx",
+            repository="https://kubernetes.github.io/ingress-nginx",
+            namespace="default",
+            values=helm_values,
+            release="nginx-ingress"
         )
 
         CfnOutput(
@@ -55,5 +152,3 @@ class AwsCdkProjectStack(Stack):
             value=eks_cluster.cluster_name,
             description="The EKS Cluster Name"
         )
-
-
