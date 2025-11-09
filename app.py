@@ -1,28 +1,20 @@
 #!/usr/bin/env python3
 import os
-
 import aws_cdk as cdk
+from platform_infrastructure.eks_platform_stack import EksPlatformStack
 
-from aws_cdk_project.aws_cdk_project_stack import AwsCdkProjectStack
-
+STACK_CONFIG = {
+    "vpc_cidr": "10.103.0.0/16",
+    "admin_user_arn": "arn:aws:iam::994967120617:user/ychyzheuski",
+    "environment": "development",
+    "eks_cluster_name": "EksCluster"
+}
 
 app = cdk.App()
-AwsCdkProjectStack(app, "AwsCdkProjectStack",
-    # If you don't specify 'env', this stack will be environment-agnostic.
-    # Account/Region-dependent features and context lookups will not work,
-    # but a single synthesized template can be deployed anywhere.
 
-    # Uncomment the next line to specialize this stack for the AWS Account
-    # and Region that are implied by the current CLI configuration.
-
-    #env=cdk.Environment(account=os.getenv('CDK_DEFAULT_ACCOUNT'), region=os.getenv('CDK_DEFAULT_REGION')),
-
-    # Uncomment the next line if you know exactly what Account and Region you
-    # want to deploy the stack to. */
-
-    #env=cdk.Environment(account='123456789012', region='us-east-1'),
-
-    # For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html
-    )
+EksPlatformStack(
+    app, "EksPlatformStack",
+    config=STACK_CONFIG
+)
 
 app.synth()
