@@ -27,8 +27,8 @@ def get_ssm_environment_value(param_name: str) -> str:
 def generate_helm_values(env: str) -> Dict[str, Any]:
     replica_map = {
         "development": 1, 
-        "stage": 2, 
-        "prod": 2
+        "staging": 2, 
+        "production": 2
     }
 
     replica_count = replica_map.get(env)
