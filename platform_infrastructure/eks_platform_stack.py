@@ -14,21 +14,23 @@ from aws_cdk import (
 from aws_cdk.lambda_layer_kubectl_v32 import KubectlV32Layer
 from constructs import Construct
 
-class AwsCdkProjectStack(Stack):
+class EksPlatformStack(Stack):
 
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(self, scope: Construct, construct_id: str, 
+                 config: dict,
+                 **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         ssm_parameter = ssm.StringParameter(
             self, "ParameterAccountEnv",
             parameter_name="/platform/account/env",
-            string_value="development",
+            string_value=config["environment"],
             description="Setting the environment development / stage / production for the account." 
         )
 
         vpc = ec2.Vpc(
             self, "VPC", 
-            ip_addresses=ec2.IpAddresses.cidr("10.103.0.0/16"),
+            ip_addresses=ec2.IpAddresses.cidr(config["vpc_cidr"]),
             max_azs=2,
             subnet_configuration=[
                     ec2.SubnetConfiguration(
@@ -65,7 +67,7 @@ class AwsCdkProjectStack(Stack):
             kubectl_layer=KubectlV32Layer(self, "kubectl"),
             default_capacity=0,
             endpoint_access=eks.EndpointAccess.PUBLIC,
-            cluster_name="EksCluster"
+            cluster_name=config["eks_cluster_name"]
         )
 
         eks_cluster.add_nodegroup_capacity(
@@ -78,11 +80,11 @@ class AwsCdkProjectStack(Stack):
             nodegroup_name="bottlerocket-nodegroup"
         )
 
-        eks_cluster.aws_auth.add_role_mapping(
-            iam.Role.from_role_arn(
+        eks_cluster.aws_auth.add_user_mapping(
+            iam.User.from_user_arn(
                 self,
-                "terraform-role",
-                "arn:aws:iam::590183962399:role/ADFS-RocketAtlassianDevOps-AppTeam"
+                "admin-user",
+                config["admin_user_arn"]
             ),
             groups=["system:masters"]
         )
@@ -94,9 +96,9 @@ class AwsCdkProjectStack(Stack):
         )
 
         lambda_handler = _lambda.Function(
-            self, "SSMReaderHandler",
+            self, "EnvironmentConfigHandler",
             runtime=_lambda.Runtime.PYTHON_3_12,
-            handler="ssm_reader_handler.handler",
+            handler="environment_config_handler.handler",
             code=_lambda.Code.from_asset("lambda"),
             timeout=Duration.minutes(4),
             vpc=vpc,
@@ -128,11 +130,11 @@ class AwsCdkProjectStack(Stack):
             }
         )
 
-        replica_count_token = helm_values_resource.get_att("ReplicaCount")
+        replica_count = helm_values_resource.get_att("ReplicaCount")
         
         helm_values = {
             "controller": {
-                "replicaCount": replica_count_token, 
+                "replicaCount": replica_count, 
                 "electionId": "ingress-controller-leader"
             }
         }

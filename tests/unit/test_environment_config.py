@@ -3,7 +3,7 @@ import sys
 import os
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'lambda'))
-from ssm_reader_handler import generate_helm_values
+from environment_config_handler import generate_helm_values
 
 
 class TestLambdaFunction:
